@@ -1,0 +1,99 @@
+var webhookUrl = 'url her frå slack-nettsida'; // Webhook URL
+var calendarId = '<id>@group.calendar.google.com'; // Id of the calendar
+var slackChannel = '#<kanalnamn>'; // Name of Slack channel to post updates to
+var threshold = 30; // Seconds to look back after "onEventUpdated" event was received
+var messageSingle = 'Det er *1 hending*';
+var messageMultiple = 'Det er *{events} hendingar*';
+var messageCreated = 'Ei *ny hending* er laga:';
+
+function sendWeeklyEventsSummary()
+{
+  sendEventsSummary(7, "denne veka")
+}
+
+function sendEventsSummary(numOfDays, periodDescriptor) {
+  var start = new Date();
+  start.setHours(0, 0, 0, 0);
+  var end = new Date(start.getTime() + numOfDays * 24 * 60 * 60 * 1000);
+
+  var events = Calendar.Events.list(calendarId, {
+    timeMin: start.toISOString(),
+    timeMax: end.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime'
+  }).items;
+
+  if (events.length === 0) {
+    Logger.log('Fann ingen hendingar.');
+    return;
+  }
+
+  // Build the message
+  var message = composeMessageHeader(events.length, periodDescriptor) 
+  for (var event of events) {
+    message += `\n\n` + formatEvent(event);
+  }
+
+  sendMessage(message);
+}
+
+function composeMessageHeader(eventCount, periodDescriptor) {
+  if (eventCount == 1) {
+    return `${messageSingle} ${periodDescriptor}`
+  } else {
+    return `${messageMultiple.replace('{events}', eventCount)} ${periodDescriptor}`;
+  }
+}
+
+function onEventUpdated(e)
+{
+  var syncStartTime = new Date(new Date() - threshold * 1000);
+
+  var events = CalendarApi.Events.list(calendarId, {
+    updatedMin: syncStartTime.toISOString()
+  }).items;
+
+  for (var event of events) {
+    if (event.status === 'cancelled') {
+      // Event has been cancelled / deleted.
+      continue;
+    }
+
+    var created = new Date(event.created);
+
+    if (created < syncStartTime) {
+      // Event has been created earlier and was only updated.
+      continue;
+    }
+
+    sendMessage(messageCreated + '\n\n' + formatEvent(event));
+  }
+}
+
+function formatEvent(event) {
+  var result = `> *<${event.htmlLink}|${event.summary}>*\n`;
+  if (event.start.date){
+    result += `> ${(new Date(event.start.date)).toLocaleString('nn-NO', {dateStyle: 'full' })}`;
+  } else if (event.start.dateTime) {
+    result += `> ${(new Date(event.start.dateTime)).toLocaleString('nn-NO', {dateStyle: 'full', timeStyle: 'short'})}`;
+  }
+
+  if (event.location) {
+    result += `\n> <https://maps.google.com/maps?q=${encodeURIComponent(event.location)}|${event.location}>`;
+  }
+
+  return result;
+}
+
+function sendMessage(message) {
+  return UrlFetchApp.fetch(webhookUrl, {
+    "method" : "post",
+    "contentType" : "application/json",
+    "payload" : JSON.stringify({
+      "channel": slackChannel,
+      "username": "Kalenderen vår",
+      "text": message,
+      "icon_emoji": ":calendar:"
+    })
+  });
+}
